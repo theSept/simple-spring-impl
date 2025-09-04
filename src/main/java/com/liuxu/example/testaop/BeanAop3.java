@@ -8,7 +8,7 @@ import com.liuxu.springframework.beans.annotion.Component;
  * @author: liuxu
  */
 @Component
-public class BeanAop03 {
+public class BeanAop3 {
 
     @Autowired
     private BeanAop2 beanAop2;
@@ -17,6 +17,11 @@ public class BeanAop03 {
         System.out.println("beanAop03 foo03()....");
     }
 
-    public void testC
+    public int testCycle(int i, int b) {
+        return beanAop2.testBeanAop1(i, b);
+    }
 
+    public BeanAop2 getBeanAop2() {
+        return beanAop2;
+    }
 }
