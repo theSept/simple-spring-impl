@@ -1,5 +1,6 @@
 package com.liuxu.springframework.utils;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 
 /**
@@ -68,5 +69,45 @@ public abstract class BeanUtils {
         return targetMethod;
     }
 
+
+    /**
+     * 实例化指定类
+     *
+     * @param clazz 类
+     * @return 实例
+     */
+    public static <T> T instantiateClass(Class<T> clazz) {
+        if (clazz.isInterface()) {
+            throw new RuntimeException("不能实例化接口");
+        }
+        Constructor<T> dcr;
+        try {
+            dcr = clazz.getDeclaredConstructor();
+        } catch (NoSuchMethodException e) {
+            throw new RuntimeException("没有找到无参构造", e);
+        }
+
+        return instantiateClass(dcr);
+    }
+
+
+    /**
+     * 实例化指定构造函数
+     *
+     * @param constructor 构造函数
+     * @param args        参数
+     * @param <T>         类
+     * @return 实例
+     */
+    public static <T> T instantiateClass(Constructor<T> constructor, Object... args) {
+        if (constructor.getParameterCount() == args.length) {
+            try {
+                return constructor.newInstance(args);
+            } catch (Exception e) {
+                throw new RuntimeException("调用构造函数出现异常:" + e.getMessage());
+            }
+        }
+        throw new RuntimeException("参数数量不一致");
+    }
 
 }

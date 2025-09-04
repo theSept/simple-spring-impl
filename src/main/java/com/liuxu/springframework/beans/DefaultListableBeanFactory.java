@@ -2,11 +2,13 @@ package com.liuxu.springframework.beans;
 
 import com.liuxu.springframework.beans.annotion.Component;
 import com.liuxu.springframework.beans.annotion.ComponentScan;
+import com.liuxu.springframework.beans.annotion.Configuration;
 import com.liuxu.springframework.beans.annotion.Primary;
 import com.liuxu.springframework.beans.annotion.Priority;
 import com.liuxu.springframework.beans.annotion.Qualifier;
 import com.liuxu.springframework.beans.autowirecapable.AbstractAutowireCapableBeanFactory;
 import com.liuxu.springframework.beans.beandefinition.GenericBeanDefinition;
+import com.liuxu.springframework.beans.beandefinition.PropertyValue;
 import com.liuxu.springframework.beans.beandefinition.RootBeanDefinition;
 import com.liuxu.springframework.beans.config.DependencyDescriptor;
 import com.liuxu.springframework.beans.destroy.DisposableBean;
@@ -14,8 +16,9 @@ import com.liuxu.springframework.beans.destroy.DisposableBeanAdapter;
 import com.liuxu.springframework.beans.interfaces.Aware;
 import com.liuxu.springframework.beans.interfaces.BeanDefinition;
 import com.liuxu.springframework.beans.interfaces.BeanDefinitionRegistry;
-import com.liuxu.springframework.beans.interfaces.BeanFactory;
+import com.liuxu.springframework.beans.interfaces.BeanDefinitionRegistryPostProcessor;
 import com.liuxu.springframework.beans.interfaces.BeanFactoryAware;
+import com.liuxu.springframework.beans.interfaces.BeanFactoryPostProcessor;
 import com.liuxu.springframework.beans.interfaces.BeanNameAware;
 import com.liuxu.springframework.beans.interfaces.BeanPostProcessor;
 import com.liuxu.springframework.beans.interfaces.DestructionAwareBeanPostProcessor;
@@ -24,19 +27,24 @@ import com.liuxu.springframework.beans.interfaces.InstantiationAwareBeanPostProc
 import com.liuxu.springframework.beans.interfaces.MergedBeanDefinitionPostProcessor;
 import com.liuxu.springframework.beans.interfaces.ObjectFactory;
 import com.liuxu.springframework.beans.interfaces.SmartInitializingSingleton;
+import com.liuxu.springframework.beans.interfaces.SmartInstantiationAwareBeanPostProcessor;
 import com.liuxu.springframework.beans.postprocessor.AutowiredAnnotationBeanPostProcessor;
 import com.liuxu.springframework.beans.postprocessor.CommonAnnotationBeanPostProcessor;
+import com.liuxu.springframework.beans.postprocessor.ConfigurationClassPostProcessor;
 import com.liuxu.springframework.utils.BeanFactoryUtils;
 import com.liuxu.springframework.utils.ClassUtils;
 import com.liuxu.springframework.utils.OrderUtils;
+import com.liuxu.springframework.utils.ReflectionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -66,6 +74,8 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
     /** (三级缓存：获取bean实例的工厂[可能返回的是AOP代理]) 单例工厂缓存：Bean 名称 - ObjectFactory */
     private final Map<String, ObjectFactory<?>> singletonFactories = new HashMap<>(16);
 
+    /** ClassLoader 来解析 Bean 类名 */
+    private ClassLoader beanClassLoader = ClassUtils.getDefaultClassLoader();
 
     /** beanName -> Bean定义 */
     private final Map<String, BeanDefinition> beanDefinitionMap = new ConcurrentHashMap<>(15);
@@ -84,6 +94,9 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
 
     /** BeanPostProcessors to apply. */
     private final List<BeanPostProcessor> beanPostProcessors = new CopyOnWriteArrayList<>();
+
+    /** BeanFactoryPostProcessors to apply. */
+    private final List<BeanFactoryPostProcessor> beanFactoryPostProcessors = new CopyOnWriteArrayList<>();
 
     /** beanDefinition Name list */
     private volatile List<String> beanDefinitionNames = new ArrayList<>(256);
@@ -109,17 +122,12 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
         refresh(configClass);
     }
 
-    public void refresh(Class<?> configClass) {
-        // 1.加载所有的 beanDefinition
-        ScannerConfigLoadBeanDefinition(configClass);
-
-        // 2.注册BeanPostProcessor
-        registerBeanPostProcessors();
-
-        // 3.初始化所有非懒加载的单例实例
-        finishBeanFactoryInitialization();
-
+    public static DefaultListableBeanFactory run(Class<?> configClass) {
+        return new DefaultListableBeanFactory(configClass);
     }
+
+    public static final String CONFIGURATION_ANNOTATION_PROCESSOR_BEAN_NAME =
+            "com.liuxu.springframework.beans.postprocessor.ConfigurationClassPostProcessor";
 
     public static final String AUTOWIRED_ANNOTATION_PROCESSOR_BEAN_NAME =
             "com.liuxu.springframework.beans.postprocessor.AutowiredAnnotationBeanPostProcessor";
@@ -131,26 +139,47 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
     /**
      * 注册相关注解配置的处理器
      *
-     * @param beanFactory bean工厂
-     * @param resource    资源
+     * @param registry BeanDefinitionRegistry
+     * @param resource 资源
      */
-    private void registerAnnotationConfigProcessors(BeanFactory beanFactory, Object resource) {
-        DefaultListableBeanFactory defaultBeanFactory = (DefaultListableBeanFactory) beanFactory;
+    private void registerAnnotationConfigProcessors(BeanDefinitionRegistry registry, Object resource) {
+
+        // 注册Config类的注解读取后处理器
+        if (!registry.containsBeanDefinition(CONFIGURATION_ANNOTATION_PROCESSOR_BEAN_NAME)) {
+            RootBeanDefinition rbd = new RootBeanDefinition(ConfigurationClassPostProcessor.class);
+            registry.registryBeanDefinition(CONFIGURATION_ANNOTATION_PROCESSOR_BEAN_NAME, rbd);
+        }
 
         // 注册自动依赖注入的处理器
-        if (!beanFactory.containsBean(AUTOWIRED_ANNOTATION_PROCESSOR_BEAN_NAME)) {
+        if (!registry.containsBeanDefinition(AUTOWIRED_ANNOTATION_PROCESSOR_BEAN_NAME)) {
             RootBeanDefinition rbd = new RootBeanDefinition(AutowiredAnnotationBeanPostProcessor.class);
-            defaultBeanFactory.registryBeanDefinition(AUTOWIRED_ANNOTATION_PROCESSOR_BEAN_NAME, rbd);
+            registry.registryBeanDefinition(AUTOWIRED_ANNOTATION_PROCESSOR_BEAN_NAME, rbd);
         }
 
         // 注册常用注解的后处理器
-        if (!beanFactory.containsBean(COMMON_ANNOTATION_PROCESSOR_BEAN_NAME)) {
+        if (!registry.containsBeanDefinition(COMMON_ANNOTATION_PROCESSOR_BEAN_NAME)) {
             RootBeanDefinition rbd = new RootBeanDefinition(CommonAnnotationBeanPostProcessor.class);
-            defaultBeanFactory.registryBeanDefinition(COMMON_ANNOTATION_PROCESSOR_BEAN_NAME, rbd);
+            registry.registryBeanDefinition(COMMON_ANNOTATION_PROCESSOR_BEAN_NAME, rbd);
         }
 
 
     }
+
+    public void refresh(Class<?> configClass) {
+        // 1.加载所有的 beanDefinition
+        ScannerConfigLoadBeanDefinition(configClass);
+
+        // 2.执行所有的 BeanFactoryPostProcess 生成相关的 BeanPostProcess
+        invokeBeanFactoryPostProcessors(this);
+
+        // 3.注册BeanPostProcessor
+        registerBeanPostProcessors();
+
+        // 4.初始化所有非懒加载的单例实例
+        finishBeanFactoryInitialization();
+
+    }
+
 
     /**
      * 加载配置类上的组件扫描注解 指定的路径下所有使用 Component 注解的类
@@ -167,11 +196,21 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
         List<Class<?>> classes = ClassUtils.reflectionsFindClassByPath(path);
 
         ArrayList<String> beanPostProcessNames = new ArrayList<>(classes.size() / 2 + 1);
+        ArrayList<String> configBeanNames = new ArrayList<>(3);
         for (Class<?> aClass : classes) {
-            Component component;
-            if (aClass.isAnnotationPresent(Component.class) && (component = aClass.getAnnotation(Component.class)) != null) {
+            Component component = null;
+            if ((aClass.isAnnotationPresent(Component.class) && (component = aClass.getAnnotation(Component.class)) != null) ||
+                    aClass.isAnnotationPresent(Configuration.class)) {
+
                 String beanName = BeanFactoryUtils.generateBeanName(aClass);
                 GenericBeanDefinition beanDefinition = new GenericBeanDefinition(aClass);
+
+                // 配置类：使用了 Configuration 注解
+                if (aClass.getAnnotation(Configuration.class) != null) {
+                    configBeanNames.add(beanName);
+                    component = Configuration.class.getAnnotation(Component.class);
+                }
+
                 beanDefinition.setLazyInit(component.lazyInit());
 
                 if (aClass.isAnnotationPresent(Primary.class)) {
@@ -183,6 +222,7 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
                     beanPostProcessNames.add(beanName);
                 }
 
+
                 this.beanDefinitionMap.put(beanName, beanDefinition);
                 this.beanDefinitionNames.add(beanName);
                 registerAlias(aClass.getName(), beanName);
@@ -191,6 +231,7 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
 
         // 类型映射的BeanName
         allBeanNamesByType.put(BeanPostProcessor.class, beanPostProcessNames);
+        allBeanNamesByType.put(Configuration.class, configBeanNames);
         log.info(">>>>>>> init loading beanDefinition done...");
     }
 
@@ -206,6 +247,52 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
             this.aliasMap.put(alias, beanName);
         }
     }
+
+
+    /**
+     * 调用BeanFactory 后处理器 （可注册BeanPostProcess）
+     *
+     * @param beanFactory 当前容器
+     */
+    private void invokeBeanFactoryPostProcessors(DefaultListableBeanFactory beanFactory) {
+
+        // 先执行手动注册的 beanFactoryPostProcess
+        for (BeanFactoryPostProcessor beanFactoryPostProcessor : this.beanFactoryPostProcessors) {
+            if (beanFactoryPostProcessor instanceof BeanDefinitionRegistryPostProcessor registryPostProcessor) {
+                registryPostProcessor.postProcessBeanDefinitionRegistry(beanFactory);
+            }
+        }
+
+        // 记录当前需要执行的处理器
+        List<BeanDefinitionRegistryPostProcessor> currentRegistryProcessors = new ArrayList<>();
+
+        // 当前容器中所有 BeanDefinitionRegistryPostProcessor 类型的定义
+        String[] postProcessorNames = beanFactory.getBeanNamesForType(BeanDefinitionRegistryPostProcessor.class);
+        for (String postProcessorName : postProcessorNames) {
+            currentRegistryProcessors.add(beanFactory.getBean(postProcessorName, BeanDefinitionRegistryPostProcessor.class));
+        }
+        // 调用BeanDefinitionRegistryPostProcess
+        invokeBeanDefinitionRegistryPostProcessors(currentRegistryProcessors, beanFactory);
+        currentRegistryProcessors.clear();
+
+
+    }
+
+    /**
+     * 执行BeanDefinitionRegistryPostProcess
+     *
+     * @param postProcessors BeanDefinitionRegistryPostProcess列表
+     * @param beanFactory    当前容器
+     */
+    private static void invokeBeanDefinitionRegistryPostProcessors(Collection<? extends BeanDefinitionRegistryPostProcessor> postProcessors, DefaultListableBeanFactory beanFactory) {
+        if (!postProcessors.isEmpty()) {
+            for (BeanDefinitionRegistryPostProcessor registryPostProcessor : postProcessors) {
+                registryPostProcessor.postProcessBeanDefinitionRegistry(beanFactory);
+            }
+        }
+
+    }
+
 
     /**
      * 注册BeanPostProcessor（后处理器）
@@ -387,7 +474,7 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
      */
     private Object getObjectForBeanInstance(
             Object beanInstance, String name, String beanName) {
-        // TODO 后续可兼容 FactoryBean 接口，通过 getObject 返回真正的实例；
+        // TODO 可兼容 FactoryBean 接口，通过 getObject 返回真正的实例；
         return beanInstance;
     }
 
@@ -446,6 +533,18 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
             this.beanPostProcessorCache = null;// 清除缓存
         }
 
+    }
+
+    /**
+     * 添加Bean工厂后处理器
+     *
+     * @param beanFactoryPostProcessor beanFactory后处理器
+     */
+    public void addBeanFactoryPostProcessor(BeanFactoryPostProcessor beanFactoryPostProcessor) {
+        synchronized (this.beanFactoryPostProcessors) {
+            this.beanFactoryPostProcessors.remove(beanFactoryPostProcessor);
+            this.beanFactoryPostProcessors.add(beanFactoryPostProcessor);
+        }
     }
 
     /**
@@ -594,13 +693,12 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
             // 5.初始化bean
             exposedObject = initializeBean(beanName, exposedObject, mbd);
         } catch (Exception e) {
-            log.error("注入属性 and 执行初始化方法 出现错误..");
-            throw new RuntimeException(e);
+            throw new RuntimeException("注入属性 and 执行初始化方法 出现错误..", e);
         }
 
         // 6.处理提前暴露的引用
         if (earlySingletonExposure) {
-            // 查询二级缓存中，当前bean是否已经存在
+            // 查询二级缓存中，当前bean是否已经存在，如果存在说明被其他对象循环依赖了，那就用其他对象已引用的实例作为真正的实例。
             Object earlySingleton = getSingleton(beanName, false);
             if (earlySingleton != null) { // 表示bean被其他对象引用了
                 if (exposedObject == beanInstance) { // 在给bean注入依赖和调用初始化时，并没有创建新的实例，就以暴露给其他对象的引用作为当前Bean的最终引用
@@ -698,6 +796,36 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
                 bp.postProcessProperties(bean, beanName);
             }
         }
+
+        // 注入beanDefinition 配置的属性
+        if (mbd.hasPropertyValues()) {
+            applyPropertyValues(beanName, mbd, bean, mbd.getPropertyValues());
+        }
+
+
+    }
+
+
+    /**
+     * 应用属性
+     * - 根据属性的名称获取Sett方法进行属性值的注入,如果没有找到常规的Sett方法将会抛出异常
+     *
+     * @param beanName beanName
+     * @param mbd      bean定义
+     * @param bean     实例
+     * @param pvs      属性和属性值列表
+     */
+    protected void applyPropertyValues(String beanName, BeanDefinition mbd, Object bean, List<PropertyValue> pvs) {
+        Class<?> beanType = mbd.getBeanType();
+        for (PropertyValue pv : pvs) {
+            Method method = ClassUtils.tryGetConventionSettMethodByFieldName(beanType, pv.fieldName(), pv.value());
+            if (method == null) {
+                // log.warn("无法找到属性 {} 的 setter 方法，请检查属性名称是否正确", pv.fieldName());
+                throw new RuntimeException("beanName:" + beanName + ", 无法找到属性" + pv.fieldName() + "的 setter 方法，请检查属性名称是否正确");
+            }
+            ReflectionUtils.makeAccessible(method);
+            ReflectionUtils.invokeMethod(method, pv.value());
+        }
     }
 
 
@@ -725,7 +853,7 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
             throw new RuntimeException("执行初始化方法出现异常：{}", e);
         }
 
-        // liuxu: 4.执行 BeanPostProcessor 初始化之后回调后处理器
+        // liuxu: 4.执行 BeanPostProcessor 初始化之后回调后处理器（会尝试创建代理）
         wrappedBean = applyBeanPostProcessorsAfterInitialization(bean, beanName);
 
         return wrappedBean;
@@ -846,7 +974,7 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
 
 
     /**
-     * 初始化之后 -执行后处理器，返回的实例可能是新实例
+     * 初始化之后 -执行后处理器，返回的实例可能是新实例(代理对象)
      *
      * @param existingBean 实例
      * @param beanName     beanName
@@ -854,7 +982,7 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
      */
     protected Object applyBeanPostProcessorsAfterInitialization(Object existingBean, String beanName) {
         Object result = existingBean;
-        for (BeanPostProcessor processor : this.beanPostProcessors) {
+        for (BeanPostProcessor processor : this.beanPostProcessors) { // 尝试创建代理
             Object current = processor.postProcessAfterInitialization(result, beanName);
             if (current == null) { // 没有返回新实例
                 return result;
@@ -902,6 +1030,11 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
                     if (beanPostProcessor instanceof DestructionAwareBeanPostProcessor daBpp) {
                         bppCache.destructionAware.add(daBpp);
                     }
+
+                    if (beanPostProcessor instanceof SmartInstantiationAwareBeanPostProcessor siabpp) {
+                        bppCache.smartInstantiationAware.add(siabpp);
+                    }
+
                 }
                 this.beanPostProcessorCache = bppCache;
             }
@@ -919,8 +1052,14 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
      * @return 返回暴露的bean对象
      */
     protected Object getEarlyBeanReference(String beanName, RootBeanDefinition mbd, Object bean) {
-        // TODO 可进行代理，返回代理对象
-        return bean;
+        // 尝试创建代理，返回代理对象
+        Object current = bean;
+        if (!getBeanPostProcessorCache().smartInstantiationAware.isEmpty()) {
+            for (SmartInstantiationAwareBeanPostProcessor postProcessor : getBeanPostProcessorCache().smartInstantiationAware) {
+                current = postProcessor.getEarlyBeanReference(current, beanName);
+            }
+        }
+        return current;
     }
 
 
@@ -979,6 +1118,23 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
      */
     public boolean isSingletonCurrentlyInCreation(String beanName) {
         return this.singletonsCurrentlyInCreation.contains(beanName);
+    }
+
+    /**
+     * 是否单例
+     *
+     * @param name beanName
+     * @return boolean
+     */
+    public boolean isSingleton(String name) {
+        String beanName = transformedBeanName(name);
+
+        BeanDefinition beanDefinition = this.beanDefinitionMap.get(beanName);
+        if (beanDefinition != null) {
+            return beanDefinition.isSingleton();
+        }
+
+        return false;
     }
 
     /**
@@ -1074,7 +1230,10 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
         } else {
             synchronized (this.beanDefinitionMap) {
                 this.beanDefinitionMap.put(beanName, beanDefinition);
-                this.beanDefinitionNames.add(beanName);
+                List<String> updatedDefinitions = new ArrayList<>(this.beanDefinitionNames.size() + 1);
+                updatedDefinitions.addAll(this.beanDefinitionNames);
+                updatedDefinitions.add(beanName);
+                this.beanDefinitionNames = updatedDefinitions;
             }
         }
     }
@@ -1096,6 +1255,9 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
 
         /* 合并 bean 定义之后，执行的后处理器 */
         final List<MergedBeanDefinitionPostProcessor> mergedDefinition = new ArrayList<>();
+
+        /* 创建bean实例时感知接口 带smart的, 可以尝试创建代理实例 */
+        final List<SmartInstantiationAwareBeanPostProcessor> smartInstantiationAware = new ArrayList<>();
     }
 
 
@@ -1258,7 +1420,7 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
      * @param type Class
      * @return BeanName[]
      */
-    private String[] getBeanNamesForType(Class<?> type) {
+    public String[] getBeanNamesForType(Class<?> type) {
         Map<Class<?>, List<String>> cache = this.allBeanNamesByType;
         // 1.缓存获取
         List<String> dbNames = cache.get(type);
@@ -1410,7 +1572,8 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
      * @param beanName beanName
      * @return true:存在 false:不存在
      */
-    private boolean containsBeanDefinition(String beanName) {
+    @Override
+    public boolean containsBeanDefinition(String beanName) {
         return this.beanDefinitionMap.containsKey(beanName);
     }
 
@@ -1501,5 +1664,39 @@ public class DefaultListableBeanFactory extends AbstractAutowireCapableBeanFacto
 
 
     }
+
+    /**
+     * 获取beanClassLoader
+     *
+     * @return
+     */
+    public ClassLoader getBeanClassLoader() {
+        return this.beanClassLoader;
+    }
+
+
+    /**
+     * 返回当前容器中所有beanDefinition的Names
+     */
+    public List<String> getBeanDefinitionNames() {
+        if (this.beanDefinitionNames.isEmpty()) {
+
+            return null;
+        }
+        return this.beanDefinitionNames;
+    }
+
+
+    /**
+     * 获取指定beanName的 beanDefinition
+     *
+     * @param beanName beanName
+     * @return beanDefinition
+     */
+    @Override
+    public BeanDefinition getBeanDefinition(String beanName) {
+        return this.beanDefinitionMap.get(beanName);
+    }
+
 
 }

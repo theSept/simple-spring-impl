@@ -1,5 +1,6 @@
 package com.liuxu.springframework.utils;
 
+import com.liuxu.springframework.beans.DefaultListableBeanFactory;
 import com.liuxu.springframework.beans.annotion.Component;
 
 /**
@@ -38,5 +39,18 @@ public abstract class BeanFactoryUtils {
         }
         return beanName.substring(0, 1).toLowerCase() + beanName.substring(1);
     }
+
+
+
+    /**
+     * 获取所有beanDefinitionNames
+     *
+     * @param beanFactory DefaultListableBeanFactory
+     * @return String[]
+     */
+    public static String[] getBeanDefinitionNames(DefaultListableBeanFactory beanFactory) {
+        return beanFactory.getBeanDefinitionNames().toArray(new String[0]);
+    }
+
 
 }

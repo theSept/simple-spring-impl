@@ -3,6 +3,10 @@ package com.liuxu.springframework.beans.beandefinition;
 import com.liuxu.springframework.beans.annotion.Primary;
 import com.liuxu.springframework.beans.interfaces.BeanDefinition;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
 /**
  * BeanDefinition
  *
@@ -35,6 +39,10 @@ public abstract class AbstractBeanDefinition implements BeanDefinition {
     private String[] destroyMethodNames;
 
 
+    /** 记录加载时需要注入当前Bean的属性的和属性值 */
+    private List<PropertyValue> propertyValues = new ArrayList<>(2);
+
+
     /**
      * 常量，指示容器应尝试推断 bean 的 destroy method name 而不是显式指定方法名称。
      * 值 "(inferred)" 专门设计用于在方法名称中包含非法字符，确保不会与具有相同名称的合法命名方法发生冲突。
@@ -56,6 +64,7 @@ public abstract class AbstractBeanDefinition implements BeanDefinition {
         this.lazyInit = bd.isLazyInit();
         this.beanType = bd.getBeanType();
         this.primary = bd.primary;
+        this.propertyValues = bd.propertyValues;
     }
 
     /**
@@ -145,4 +154,21 @@ public abstract class AbstractBeanDefinition implements BeanDefinition {
         return lazyInit;
     }
 
+    /**
+     * 拿到要注入的属性信息
+     */
+    @Override
+    public List<PropertyValue> getPropertyValues() {
+        return propertyValues;
+    }
+
+    /**
+     * 判断当前BeanDefinition是否有属性信息
+     *
+     * @return
+     */
+    @Override
+    public boolean hasPropertyValues() {
+        return (this.propertyValues != null && !this.propertyValues.isEmpty());
+    }
 }

@@ -102,7 +102,7 @@ public class DisposableBeanAdapter implements DisposableBean {
                                 throw new IllegalArgumentException("无效的销毁方法: " + destroyMethodName + ". 在 bean: " + beanName + " 中发现：该方法接受一个参数，但该参数不是 boolean");
                             }
                         }
-                        // TODO 待AOP代理后再回来处理，Spring中此处会尝试去找接口中同名的方法。
+                        // TODO Spring中此处会尝试去找接口中同名的方法。暂不实现
 
                         methodArrayList.add(destroyMethod);
                     }

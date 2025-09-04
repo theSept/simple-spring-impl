@@ -1,5 +1,10 @@
 package com.liuxu.springframework.beans.interfaces;
 
+import com.liuxu.springframework.beans.beandefinition.PropertyValue;
+
+import java.util.List;
+import java.util.Map;
+
 /**
  * Bean定义
  *
@@ -27,4 +32,7 @@ public interface BeanDefinition {
 
     void setLazyInit(Boolean lazyInit);
 
+    List<PropertyValue> getPropertyValues();
+
+    boolean hasPropertyValues();
 }

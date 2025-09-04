@@ -25,6 +25,25 @@ public interface BeanDefinitionRegistry {
      */
     void registryBeanDefinition(String beanName, BeanDefinition beanDefinition);
 
+
+    /**
+     * 判断是否包含指定名称的 bean 定义
+     *
+     * @param beanName beanName
+     * @return true：包含
+     */
+    boolean containsBeanDefinition(String beanName);
+
+
+    /**
+     * 获取指定名称的 bean 定义
+     * @param beanName beanName
+     * @return BeanDefinition
+     */
+    BeanDefinition getBeanDefinition(String beanName);
+
+
+
     // void removeBeanDefinition(String name);
 
     // BeanDefinition getBeanDefinition(String beanName);
